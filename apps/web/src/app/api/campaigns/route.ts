@@ -6,6 +6,7 @@ import {
 } from "@/lib/translation";
 import { listCreditListings, createCreditListing, purchaseCreditListing } from "@/services/carbon-credit-market.service";
 import {
+  autoTranslate,
   detectLanguage,
   isSupportedTranslationLocale,
   localizeCampaign,
@@ -32,11 +33,12 @@ async function getCampaigns(request: Request) {
   const status = url.searchParams.get("status") as never;
   const creator = url.searchParams.get("creator") ?? undefined;
   const search = url.searchParams.get("search") ?? undefined;
+  const isStaffPick = url.searchParams.has("isStaffPick") ? url.searchParams.get("isStaffPick") === "true" : undefined;
   const includeStats = url.searchParams.get("includeStats") === "true";
   const limit = Number(url.searchParams.get("limit") ?? 20);
   const offset = Number(url.searchParams.get("offset") ?? 0);
   const campaigns = await queryCampaigns({
-    filter: { status: status || undefined, creator, search },
+    filter: { status: status || undefined, creator, search, isStaffPick },
     sort: { field: (url.searchParams.get("sort") as never) || "createdAt", direction: url.searchParams.get("direction") === "asc" ? "ASC" : "DESC" },
     limit: Number.isFinite(limit) ? limit : 20,
     offset: Number.isFinite(offset) ? offset : 0,
@@ -71,6 +73,8 @@ async function postCampaign(request: Request) {
     const body = await request.json() as {
       creator?: string;
       creatorEmail?: string;
+      pledgeThankYouGreeting?: string;
+      pledgeThankYouBody?: string;
       name?: string;
       description?: string;
       location?: string;
@@ -98,11 +102,14 @@ async function postCampaign(request: Request) {
         country?: unknown;
       };
     };
-    if (body.autoTranslate) {
-      return Response.json({ error: "Automatic translation is not configured; provide reviewed translations instead" }, { status: 501 });
-    }
     if (!body.creator || !body.name || !body.goalAmount) {
       return Response.json({ error: "creator, name, and goalAmount are required" }, { status: 400 });
+    }
+    if (body.pledgeThankYouGreeting !== undefined && (typeof body.pledgeThankYouGreeting !== "string" || body.pledgeThankYouGreeting.length > 240)) {
+      return Response.json({ error: "pledgeThankYouGreeting must be 240 characters or fewer" }, { status: 400 });
+    }
+    if (body.pledgeThankYouBody !== undefined && (typeof body.pledgeThankYouBody !== "string" || body.pledgeThankYouBody.length > 2000)) {
+      return Response.json({ error: "pledgeThankYouBody must be 2,000 characters or fewer" }, { status: 400 });
     }
     if (!/^\d+$/.test(body.goalAmount)) {
       return Response.json({ error: "goalAmount must be a non-negative integer string" }, { status: 400 });
@@ -220,16 +227,36 @@ async function postCampaign(request: Request) {
       );
     }
 
-    const description = body.description ?? "";
+const description = body.description ?? "";
     const language = body.language ?? detectLanguage(description);
     const translations = body.translations ?? {};
-    // Language detection is metadata only; translations are supplied explicitly.
+    // Language detection and auto-translation
     const description = body.description ?? "";
     const language = body.language ? normalizeTranslationLocale(body.language)! : detectLanguage(description);
+    let translations = body.translations ?? {};
+    if (body.autoTranslate) {
+      translations = {
+        ...autoTranslate(description, SUPPORTED_TRANSLATION_LOCALES),
+        ...translations,
+      };
+    }
+
+    // Campaign insurance pool: 1% of goal funds allocated to protect against tree loss within 2 years.
+    const goalAmountBigInt = BigInt(body.goalAmount);
+    const insurancePoolAmount = (goalAmountBigInt / 100n).toString();
+    const insurancePool = {
+      amount: insurancePoolAmount,
+      contributionRate: 0.01,
+      coverageWindowMs: 2 * 365 * 24 * 60 * 60 * 1000,
+      claimedAmount: "0",
+      status: "active" as const,
+    };
 
     const campaign = await createCampaign({
       creator: body.creator,
       creatorEmail: body.creatorEmail,
+      pledgeThankYouGreeting: body.pledgeThankYouGreeting,
+      pledgeThankYouBody: body.pledgeThankYouBody,
       name: body.name,
       description,
       location: body.location,
@@ -244,8 +271,9 @@ async function postCampaign(request: Request) {
       network: body.network,
       nonprofitPartner,
       language,
-      translations: body.translations,
+      translations,
       localizedContent: body.localizedContent,
+      insurancePool,
     });
     return Response.json(campaign, { status: 201 });
   } catch {
