@@ -47,7 +47,13 @@ export {
 } from "./CampaignFundingClient.js";
 export * from "./CarbonCreditClient.js";
 export * from "./ImpactNFTClient.js";
+export * from "./NFTRewardTierClient.js";
 export * from "./nft-milestone.js";
+export * from "./SpeciesProofClient.js";
+export * from "./utils/checked-math.js";
+export * from "./CampaignInsuranceClient.js";
+export * from "./CampaignDiversityClient.js";
+export * from "./CampaignEscrowClient.js";
 
 // Export deployment module, disambiguating names also exported by generated bindings.
 export { ContractDeployer } from "./deployer/ContractDeployer.js";
